@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="description" content="Convert PDF tables to formatted Excel files locally in your browser">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon-192.png">
+  <title>PDF Table to Excel</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0f172a;background:#f1f5f9}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh}
+    .app{max-width:960px;margin:auto;padding:28px 18px 42px}
+    .hero{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:20px}
+    .eyebrow{font-size:12px;font-weight:800;letter-spacing:.13em;color:#2563eb}
+    h1{font-size:clamp(30px,5vw,44px);line-height:1.1;margin:7px 0 8px;letter-spacing:-.03em}
+    .subtitle{margin:0;color:#64748b;font-size:15px;max-width:680px}
+    .card{background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:22px;box-shadow:0 10px 35px rgba(15,23,42,.07);margin-bottom:18px}
+    .dropzone{min-height:225px;border:2px dashed #93c5fd;border-radius:16px;background:#eff6ff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;padding:25px;transition:.15s}
+    .dropzone:hover,.dropzone.drag{background:#dbeafe;border-color:#2563eb}
+    .dropzone input{display:none}.upload-icon{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:#2563eb;color:#fff;font-size:31px;font-weight:300;margin-bottom:13px}
+    .dropzone strong{font-size:18px}.dropzone small{margin-top:6px;color:#64748b}
+    .options{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:18px 0}
+    .option{display:flex;gap:9px;align-items:flex-start;background:#f8fafc;padding:12px;border-radius:11px;font-size:14px;color:#334155}
+    .option input{margin-top:2px;accent-color:#2563eb}
+    button{font:inherit;border-radius:11px;padding:12px 18px;font-weight:750;cursor:pointer}
+    .primary{width:100%;border:0;background:#2563eb;color:#fff;font-size:16px}.primary:hover:not(:disabled){background:#1d4ed8}
+    .primary:disabled{background:#94a3b8;cursor:not-allowed}.secondary{background:#fff;color:#1d4ed8;border:1px solid #bfdbfe}
+    .hidden{display:none!important}.progress-wrap{margin-top:18px}.progress-head{display:flex;justify-content:space-between;font-size:13px;color:#475569;margin-bottom:7px}
+    .progress{height:9px;background:#e2e8f0;border-radius:20px;overflow:hidden}.progress>div{height:100%;width:0;background:#2563eb;transition:width .2s}
+    .message{margin-top:16px;padding:14px;border-radius:11px;font-size:14px}.success{background:#ecfdf5;color:#166534;border:1px solid #bbf7d0}.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+    .info h2{margin:0 0 12px;font-size:21px}.info ol{margin:0;padding-left:22px;color:#475569;line-height:1.7}.note{margin:15px 0 0;background:#fffbeb;border-left:4px solid #f59e0b;padding:12px;color:#92400e;font-size:13px}
+    footer{display:flex;justify-content:space-between;gap:10px;color:#94a3b8;font-size:12px;padding:3px 4px}
+    .status{margin-top:10px;font-size:12px;color:#64748b}.status.ok{color:#166534}.status.bad{color:#b91c1c}
+    @media(max-width:620px){.app{padding:18px 12px 30px}.hero{flex-direction:column}.secondary{width:100%}footer{flex-direction:column}}
+  </style>
+</head>
+<body>
+<main class="app">
+  <header class="hero">
+    <div>
+      <div class="eyebrow">PWA • LOCAL PROCESSING</div>
+      <h1>PDF Table to Excel</h1>
+      <p class="subtitle">Extract English tables from text-based PDFs and create a formatted Excel workbook directly in your browser.</p>
+    </div>
+    <button id="installBtn" class="secondary hidden" type="button">Install App</button>
+  </header>
+
+  <section class="card">
+    <label class="dropzone" id="dropzone" for="pdfInput">
+      <input id="pdfInput" type="file" accept="application/pdf,.pdf">
+      <span class="upload-icon">↑</span>
+      <strong id="fileLabel">Choose a PDF file</strong>
+      <small>or drag &amp; drop a PDF here</small>
+    </label>
+
+    <div class="options">
+      <label class="option"><input id="englishOnly" type="checkbox" checked> <span>Keep English-header tables only</span></label>
+      <label class="option"><input id="mergePages" type="checkbox" checked> <span>Merge continuation rows/pages</span></label>
+      <label class="option"><input id="commaBreaks" type="checkbox" checked> <span>Add line break after commas</span></label>
+    </div>
+
+    <button id="convertBtn" class="primary" type="button" disabled>Convert PDF to Excel</button>
+
+    <div class="progress-wrap hidden" id="progressWrap">
+      <div class="progress-head"><span id="statusText">Ready</span><span id="progressPct">0%</span></div>
+      <div class="progress"><div id="progressBar"></div></div>
+    </div>
+
+    <div id="result" class="message success hidden"></div>
+    <div id="error" class="message error hidden"></div>
+    <div id="libraryStatus" class="status">Loading PDF and Excel engines…</div>
+  </section>
+
+  <section class="card info">
+    <h2>How it works</h2>
+    <ol>
+      <li>Select a text-based PDF containing tables.</li>
+      <li>PDF text and coordinates are read locally in your browser.</li>
+      <li>Table rows/columns are reconstructed and English headers are filtered.</li>
+      <li>A formatted <strong>.xlsx</strong> file is generated and downloaded.</li>
+    </ol>
+    <p class="note"><strong>Important:</strong> This browser implementation is designed for text-based PDFs. Scanned/image-only PDFs need OCR. Your original Python program uses pdfplumber's table detector; a browser does not expose that same detector, so this version reconstructs tables from PDF text positions.</p>
+  </section>
+
+  <footer><span>PDF.js + ExcelJS</span><span>PDFs are processed locally.</span></footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

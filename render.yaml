@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: pdf-table-to-excel-api
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app
-    healthCheckPath: /health
-    plan: free

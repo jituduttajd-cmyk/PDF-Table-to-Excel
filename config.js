@@ -5,5 +5,5 @@
    };
 */
 window.APP_CONFIG = {
-  API_BASE_URL: ""
+  API_BASE_URL: "https://pdf-table-to-excel-api-xxxx.onrender.com"
 };

@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF → Excel Converter</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1f2937">
+<style>
+  :root{
+    --bg:#f7f7f5; --panel:#ffffff; --ink:#1f2937; --muted:#6b7280;
+    --accent:#2563eb; --accent-hover:#1d4ed8; --border:#e5e7eb; --ok:#059669; --err:#dc2626;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:32px 16px;
+  }
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:16px;
+    max-width:640px; width:100%; padding:32px; box-shadow:0 1px 3px rgba(0,0,0,.06);
+  }
+  h1{font-size:1.4rem; margin:0 0 4px;}
+  p.sub{color:var(--muted); margin:0 0 24px; font-size:.92rem;}
+  .drop{
+    border:2px dashed var(--border); border-radius:12px; padding:36px 20px; text-align:center;
+    cursor:pointer; transition:.15s; background:#fafafa;
+  }
+  .drop.drag{border-color:var(--accent); background:#eff6ff;}
+  .drop svg{width:32px; height:32px; margin-bottom:8px; color:var(--muted);}
+  .drop b{color:var(--accent);}
+  input[type=file]{display:none;}
+  .file-info{margin-top:16px; font-size:.9rem; color:var(--muted); display:none;}
+  .file-info.show{display:block;}
+  .options{margin-top:20px; display:flex; gap:16px; flex-wrap:wrap; font-size:.88rem;}
+  .options label{display:flex; align-items:center; gap:6px; color:var(--muted);}
+  button.primary{
+    margin-top:20px; width:100%; padding:12px 20px; background:var(--accent); color:#fff;
+    border:none; border-radius:10px; font-size:.95rem; font-weight:600; cursor:pointer; transition:.15s;
+  }
+  button.primary:hover{background:var(--accent-hover);}
+  button.primary:disabled{background:#9ca3af; cursor:not-allowed;}
+  .progress-wrap{margin-top:16px; display:none;}
+  .progress-wrap.show{display:block;}
+  .bar{height:6px; background:var(--border); border-radius:3px; overflow:hidden;}
+  .bar > div{height:100%; background:var(--accent); width:0%; transition:width .2s;}
+  .status{margin-top:8px; font-size:.85rem; color:var(--muted);}
+  .status.ok{color:var(--ok);} .status.err{color:var(--err);}
+  .preview{margin-top:20px; display:none;}
+  .preview.show{display:block;}
+  .preview h2{font-size:.95rem; margin:0 0 8px;}
+  table.prev{border-collapse:collapse; width:100%; font-size:.78rem;}
+  table.prev th, table.prev td{border:1px solid var(--border); padding:4px 6px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:140px;}
+  table.prev th{background:#f3f4f6;}
+  .scrollx{overflow-x:auto; border:1px solid var(--border); border-radius:8px; max-height:260px; overflow-y:auto;}
+  footer{margin-top:20px; color:var(--muted); font-size:.78rem; text-align:center; max-width:640px;}
+  .install-btn{display:none; margin-top:12px; background:#111827; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:.82rem; cursor:pointer;}
+  .install-btn.show{display:inline-block;}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>PDF → Excel</h1>
+  <p class="sub">Runs entirely in your browser. Nothing is uploaded anywhere — install it as an app and it works offline.</p>
+
+  <div class="drop" id="drop">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4M12 4l-4 4M12 4l4 4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+    <div><b>Click to choose</b> or drag a PDF here</div>
+    <input type="file" id="fileInput" accept="application/pdf">
+  </div>
+  <div class="file-info" id="fileInfo"></div>
+
+  <div class="options">
+    <label><input type="checkbox" id="perTableSheets" checked> One sheet per table</label>
+    <label><input type="checkbox" id="trimEmpty" checked> Trim empty rows/columns</label>
+    <label><input type="checkbox" id="tablesOnly" checked> Tables only (skip paragraphs/headings)</label>
+    <label><input type="checkbox" id="englishOnly" checked> English text only</label>
+    <label><input type="checkbox" id="colorHeading" checked> Color heading row</label>
+    <label><input type="checkbox" id="breakAfterPunct" checked> Line break after comma & colon</label>
+  </div>
+
+  <button class="primary" id="convertBtn" disabled>Convert to Excel</button>
+
+  <div class="progress-wrap" id="progressWrap">
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="status" id="statusText">Preparing…</div>
+  </div>
+
+  <div class="preview" id="previewWrap">
+    <h2>Preview (first sheet)</h2>
+    <div class="scrollx"><table class="prev" id="previewTable"></table></div>
+  </div>
+
+  <button class="install-btn" id="installBtn">Install app</button>
+</div>
+
+<footer>
+  Tables are extracted from the PDF's actual drawn grid lines when present (the same
+  approach professional table-extraction tools use). Running headers/footers and section
+  markers are scrubbed from cell text piece-by-piece, so they're caught even when split
+  across two cells by imperfect column detection — without touching legitimate short cells
+  or roman-numeral markers like "(i)"/"(ii)" that appear in real data. If a "new row"'s
+  serial number isn't a plausible next value (e.g. a stray page-footer number bleeding into
+  that column), it's treated as a continuation of the previous row instead of a bogus new
+  entry. A "Notes:" heading, or the lettered notes list itself, marks the definite end of
+  the table. Pages without visible grid lines fall back to text-position clustering.
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const fileInfo = document.getElementById('fileInfo');
+const convertBtn = document.getElementById('convertBtn');
+const progressWrap = document.getElementById('progressWrap');
+const barFill = document.getElementById('barFill');
+const statusText = document.getElementById('statusText');
+const previewWrap = document.getElementById('previewWrap');
+const previewTable = document.getElementById('previewTable');
+
+let currentFile = null;
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('drag'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+function handleFile(file){
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
+    alert('Please choose a PDF file.'); return;
+  }
+  currentFile = file;
+  fileInfo.textContent = `${file.name} — ${(file.size/1024).toFixed(1)} KB`;
+  fileInfo.classList.add('show');
+  convertBtn.disabled = false;
+  previewWrap.classList.remove('show');
+}
+
+convertBtn.addEventListener('click', async () => {
+  if (!currentFile) return;
+  convertBtn.disabled = true;
+  progressWrap.classList.add('show');
+  statusText.className = 'status';
+  setProgress(3, 'Reading file…');
+  try {
+    const arrayBuffer = await currentFile.arrayBuffer();
+    setProgress(8, 'Loading PDF…');
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const numPages = pdf.numPages;
+    const perTableSheets = document.getElementById('perTableSheets').checked;
+    const trimEmpty = document.getElementById('trimEmpty').checked;
+    const tablesOnly = document.getElementById('tablesOnly').checked;
+    const englishOnly = document.getElementById('englishOnly').checked;
+    const colorHeading = document.getElementById('colorHeading').checked;
+    const breakAfterPunct = document.getElementById('breakAfterPunct').checked;
+
+    const logicalTables = await buildLogicalTables(
+      pdf,
+      { tablesOnly, englishOnly, trimEmpty },
+      (p) => setProgress(10 + (p/numPages)*70, `Extracting page ${p} of ${numPages}…`)
+    );
+
+    if (logicalTables.length === 0){
+      renderPreview([]);
+      statusText.textContent = `No table-like content survived the current filters — try unchecking "Tables only" or "English only".`;
+      statusText.className = 'status err';
+      return;
+    }
+
+    setProgress(88, 'Building spreadsheet…');
+    const workbook = new ExcelJS.Workbook();
+    if (perTableSheets){
+      logicalTables.forEach((table, i) => {
+        const ws = workbook.addWorksheet(`Table ${i+1}`.slice(0,31));
+        writeTableToSheet(ws, table, { colorHeading, breakAfterPunct });
+      });
+    } else {
+      const ws = workbook.addWorksheet('PDF Data');
+      logicalTables.forEach((table, i) => {
+        writeTableToSheet(ws, table, { colorHeading, breakAfterPunct });
+        if (i < logicalTables.length - 1) ws.addRow([]);
+      });
+    }
+
+    const outName = currentFile.name.replace(/\.pdf$/i, '') + '.xlsx';
+    const buffer = await workbook.xlsx.writeBuffer();
+    downloadBlob(buffer, outName);
+
+    renderPreview(logicalTables[0]);
+    const n = logicalTables.length;
+    setProgress(100, `Done — downloaded ${outName} (${n} table${n > 1 ? 's' : ''} found)`, true);
+  } catch (err){
+    console.error(err);
+    statusText.textContent = 'Error: ' + err.message;
+    statusText.className = 'status err';
+  } finally {
+    convertBtn.disabled = false;
+  }
+});
+
+function setProgress(pct, msg, ok){
+  barFill.style.width = pct + '%';
+  statusText.textContent = msg;
+  if (ok) statusText.classList.add('ok');
+}
+
+// Group text items into rows by Y position, then order left-to-right,
+// then cluster X positions across the page into column bins.
+function itemsToRows(items){
+  const pts = items
+    .filter(it => it.str !== undefined)
+    .map(it => ({
+      text: it.str,
+      x: it.transform[4],
+      y: it.transform[5],
+    }));
+  if (pts.length === 0) return [];
+
+  // sort by y descending (PDF y grows upward), then x ascending
+  pts.sort((a,b) => b.y - a.y || a.x - b.x);
+
+  const rowTolerance = 3; // px tolerance for same-row grouping
+  const rows = [];
+  let currentRow = [pts[0]];
+  let currentY = pts[0].y;
+
+  for (let i = 1; i < pts.length; i++){
+    const pt = pts[i];
+    if (Math.abs(pt.y - currentY) <= rowTolerance){
+      currentRow.push(pt);
+    } else {
+      rows.push(currentRow);
+      currentRow = [pt];
+      currentY = pt.y;
+    }
+  }
+  rows.push(currentRow);
+  rows.forEach(r => r.sort((a,b) => a.x - b.x));
+  return rows;
+}
+
+// Cluster all X positions across rows into column bins, then place each
+// row's text into the nearest bin -> produces a rectangular array.
+function rowsToTable(rows){
+  if (rows.length === 0) return [];
+
+  const allX = [];
+  rows.forEach(r => r.forEach(pt => allX.push(pt.x)));
+  allX.sort((a,b) => a-b);
+
+  const gapThreshold = 10; // min horizontal gap (px) to treat as a new column
+  const bins = [];
+  let binStart = allX[0];
+  let prev = allX[0];
+  for (let i = 1; i < allX.length; i++){
+    if (allX[i] - prev > gapThreshold){
+      bins.push((binStart+prev)/2);
+      binStart = allX[i];
+    }
+    prev = allX[i];
+  }
+  bins.push((binStart+prev)/2);
+
+  function binIndex(x){
+    let best = 0, bestDist = Infinity;
+    for (let i=0;i<bins.length;i++){
+      const d = Math.abs(x - bins[i]);
+      if (d < bestDist){ bestDist = d; best = i; }
+    }
+    return best;
+  }
+
+  const table = rows.map(row => {
+    const line = new Array(bins.length).fill('');
+    row.forEach(pt => {
+      const idx = binIndex(pt.x);
+      line[idx] = line[idx] ? (line[idx] + ' ' + pt.text) : pt.text;
+    });
+    return line;
+  });
+
+  return table;
+}
+
+// Extracts logical tables from the PDF. A table's header is only printed
+// once, on the page where it starts — pages after that just continue the
+// data with no repeated header — so a header is confirmed by the
+// "(1) (2) (3)…" column-index row that follows it (a strong, layout-
+// agnostic signal common to gazette/legal-style tables), rather than by
+// assuming every page has its own header. Rows wrapped across a page
+// break (blank first column, content in later columns) are merged back
+// into the previous row. When englishOnly is on, a whole page is skipped
+// if its text is predominantly non-Latin — this is what keeps a
+// bilingual document's other-language table out entirely, rather than
+// leaving behind filtered fragments of it.
+// --- Ruling-line (vector grid) table detection ---
+// This reads the PDF's actual drawn lines/rectangles — the same source of
+// truth pdfplumber uses — instead of only guessing table structure from
+// text positions. It walks the page's operator list, tracks the current
+// transform matrix through save/restore/transform ops, collects straight
+// horizontal/vertical strokes and rectangle edges in page space, clusters
+// them into grid lines, and assigns each text item to the grid cell whose
+// bounds contain it. Text falling outside the grid entirely (running page
+// headers/footers, paragraph text above/below the table) is naturally
+// excluded, since it has no matching cell — this is what fixes headers
+// and footers leaking into extracted rows.
+
+function mulCTM(m1, m2){
+  const [a1,b1,c1,d1,e1,f1] = m1;
+  const [a2,b2,c2,d2,e2,f2] = m2;
+  return [
+    a1*a2 + c1*b2, b1*a2 + d1*b2,
+    a1*c2 + c1*d2, b1*c2 + d1*d2,
+    a1*e2 + c1*f2 + e1, b1*e2 + d1*f2 + f1
+  ];
+}
+function applyCTM(x, y, m){
+  return [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
+}
+
+async function getPageLines(page){
+  const opList = await page.getOperatorList();
+  const OPS = pdfjsLib.OPS;
+  const horizontals = [];
+  const verticals = [];
+  let ctm = [1,0,0,1,0,0];
+  const stack = [];
+  let pathSegments = [];
+
+  const { fnArray, argsArray } = opList;
+  for (let i = 0; i < fnArray.length; i++){
+    const op = fnArray[i];
+    const a = argsArray[i];
+    if (op === OPS.save){
+      stack.push(ctm.slice());
+    } else if (op === OPS.restore){
+      ctm = stack.pop() || ctm;
+    } else if (op === OPS.transform){
+      ctm = mulCTM(ctm, a);
+    } else if (op === OPS.constructPath){
+      const subOps = a[0], subArgs = a[1];
+      let idx = 0, cur = null, start = null;
+      for (const subOp of subOps){
+        if (subOp === OPS.moveTo){
+          const pt = applyCTM(subArgs[idx++], subArgs[idx++], ctm);
+          cur = pt; start = pt;
+        } else if (subOp === OPS.lineTo){
+          const pt = applyCTM(subArgs[idx++], subArgs[idx++], ctm);
+          if (cur) pathSegments.push({ x1: cur[0], y1: cur[1], x2: pt[0], y2: pt[1] });
+          cur = pt;
+        } else if (subOp === OPS.curveTo){
+          idx += 4;
+          const pt = applyCTM(subArgs[idx++], subArgs[idx++], ctm);
+          cur = pt; // curves aren't table borders — just advance the pen
+        } else if (subOp === OPS.closePath){
+          if (cur && start) pathSegments.push({ x1: cur[0], y1: cur[1], x2: start[0], y2: start[1] });
+          cur = start;
+        } else if (subOp === OPS.rectangle){
+          const x = subArgs[idx++], y = subArgs[idx++], w = subArgs[idx++], h = subArgs[idx++];
+          const p1 = applyCTM(x, y, ctm), p2 = applyCTM(x+w, y, ctm);
+          const p3 = applyCTM(x+w, y+h, ctm), p4 = applyCTM(x, y+h, ctm);
+          pathSegments.push({ x1:p1[0], y1:p1[1], x2:p2[0], y2:p2[1] });
+          pathSegments.push({ x1:p2[0], y1:p2[1], x2:p3[0], y2:p3[1] });
+          pathSegments.push({ x1:p3[0], y1:p3[1], x2:p4[0], y2:p4[1] });
+          pathSegments.push({ x1:p4[0], y1:p4[1], x2:p1[0], y2:p1[1] });
+        }
+      }
+    } else if (
+      op === OPS.stroke || op === OPS.closeStroke ||
+      op === OPS.fill || op === OPS.eoFill ||
+      op === OPS.fillStroke || op === OPS.eoFillStroke
+    ){
+      for (const seg of pathSegments){
+        const dx = Math.abs(seg.x2 - seg.x1), dy = Math.abs(seg.y2 - seg.y1);
+        if (dy < 0.75 && dx > 2){
+          horizontals.push({ y: (seg.y1+seg.y2)/2, x1: Math.min(seg.x1,seg.x2), x2: Math.max(seg.x1,seg.x2) });
+        } else if (dx < 0.75 && dy > 2){
+          verticals.push({ x: (seg.x1+seg.x2)/2, y1: Math.min(seg.y1,seg.y2), y2: Math.max(seg.y1,seg.y2) });
+        }
+      }
+      pathSegments = [];
+    }
+  }
+  return { horizontals, verticals };
+}
+
+function clusterCoords(values, tolerance){
+  if (values.length === 0) return [];
+  const sorted = values.slice().sort((a,b) => a-b);
+  const clusters = []; let cur = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++){
+    if (sorted[i] - cur[cur.length-1] <= tolerance) cur.push(sorted[i]);
+    else { clusters.push(cur); cur = [sorted[i]]; }
+  }
+  clusters.push(cur);
+  return clusters.map(c => c.reduce((a,b) => a+b, 0) / c.length);
+}
+
+function cellTextFromPoints(pts){
+  if (pts.length === 0) return '';
+  pts.sort((a,b) => b.y - a.y || a.x - b.x);
+  const lines = []; let cur = [pts[0]]; let curY = pts[0].y;
+  for (let i = 1; i < pts.length; i++){
+    if (Math.abs(pts[i].y - curY) <= 3){ cur.push(pts[i]); }
+    else { lines.push(cur); cur = [pts[i]]; curY = pts[i].y; }
+  }
+  lines.push(cur);
+  return lines.map(l => l.slice().sort((a,b) => a.x-b.x).map(p => p.str).join(' ')).join('\n');
+}
+
+// Requires at least a 2x2 grid (so at least one real row and one real
+// column boundary) — anything sparser isn't a ruled table and should
+// fall back to position clustering instead.
+function buildGridTable(horizontals, verticals, items){
+  if (horizontals.length < 2 || verticals.length < 2) return null;
+  const yLines = clusterCoords(horizontals.map(h => h.y), 2).sort((a,b) => b-a);
+  const xLines = clusterCoords(verticals.map(v => v.x), 2).sort((a,b) => a-b);
+  if (yLines.length < 2 || xLines.length < 2) return null;
+
+  const nRows = yLines.length - 1;
+  const nCols = xLines.length - 1;
+  const cellItems = Array.from({length:nRows}, () => Array.from({length:nCols}, () => []));
+
+  items.forEach(it => {
+    if (!it.str || !it.str.trim()) return;
+    const x = it.transform[4], y = it.transform[5];
+    let r = -1;
+    for (let i = 0; i < nRows; i++){ if (y <= yLines[i]+0.5 && y >= yLines[i+1]-0.5){ r = i; break; } }
+    let c = -1;
+    for (let i = 0; i < nCols; i++){ if (x >= xLines[i]-0.5 && x <= xLines[i+1]+0.5){ c = i; break; } }
+    if (r >= 0 && c >= 0) cellItems[r][c].push({ str: it.str, x, y });
+  });
+
+  return cellItems.map(rowCells => rowCells.map(cellPts => cellTextFromPoints(cellPts)));
+}
+
+// Extracts a single page's table. Tries ruling-line grid detection first
+// (accurate for ruled/gridline PDFs — matches how pdfplumber works);
+// falls back to text-position clustering if the page has no detectable
+// grid lines (borderless/whitespace-separated tables). Returns null if
+// the page should be skipped entirely (non-English under englishOnly),
+// or [] if nothing table-like survived filtering.
+async function extractPageTable(pdf, pageNum, opts){
+  const { tablesOnly, englishOnly, trimEmpty } = opts;
+  const page = await pdf.getPage(pageNum);
+  const textContent = await page.getTextContent();
+  let items = textContent.items;
+
+  if (englishOnly){
+    const ratio = asciiRatio(items.map(it => it.str || '').join(''));
+    if (ratio < 0.5) return null; // page is predominantly non-English — skip entirely
+    items = items.map(filterEnglishItem).filter(it => it.str.trim() !== '');
+  }
+
+  let table = null;
+  try {
+    const { horizontals, verticals } = await getPageLines(page);
+    table = buildGridTable(horizontals, verticals, items);
+  } catch (e){
+    console.warn('Ruling-line detection failed on page', pageNum, '— falling back to position clustering.', e);
+    table = null;
+  }
+
+  if (!table){
+    const rows = itemsToRows(items);
+    table = rowsToTable(rows);
+  }
+
+  // Scrub running-header/section-marker fragments out of individual cells
+  // (not just whole-cell matches) — this catches contamination that
+  // partial/imperfect column detection can glue onto an otherwise real cell.
+  table = table.map(row => row.map(stripFurnitureFragments));
+
+  if (tablesOnly){
+    table = keepTableRowsOnly(table);
+    table = dropPageFurnitureRows(table);
+  }
+  if (trimEmpty) table = trimTable(table);
+  return table;
+}
+
+// Primary pass: reconstructs logical tables using the "(1) (2) (3)…"
+// index-row convention (see notes above) to tell a genuine header page
+// apart from a continuation page. Works well for gazette/legal/government
+// documents that follow that convention.
+async function buildLogicalTablesHeaderAware(pdf, opts, onProgress){
+  const numPages = pdf.numPages;
+  const logicalTables = [];
+  let current = null;
+
+  for (let p = 1; p <= numPages; p++){
+    if (onProgress) onProgress(p);
+    let table = await extractPageTable(pdf, p, opts);
+    if (table === null) continue;
+
+    const truncated = truncateAtFootnotes(table);
+    table = truncated.table;
+    if (table.length === 0){
+      if (truncated.hitFootnotes && current){ logicalTables.push(current); current = null; }
+      if (truncated.hitFootnotes) break; // footnotes/notes mark the end of the document's table content
+      continue;
+    }
+
+    const headerBlock = findHeaderBlock(table);
+    if (headerBlock){
+      if (current) logicalTables.push(current);
+      current = [headerBlock.headerRow];
+      mergeDataRows(current, headerBlock.dataRows);
+    } else if (current){
+      mergeDataRows(current, table);
+    }
+
+    if (truncated.hitFootnotes){
+      if (current) logicalTables.push(current);
+      current = null;
+      break; // nothing after the notes section belongs to the table
+    }
+  }
+  if (current) logicalTables.push(current);
+  return logicalTables;
+}
+
+// Fallback pass: used when the document doesn't follow the index-row
+// header convention at all (so the primary pass finds nothing). Treats
+// each page's first table row as a header candidate; a new page is
+// merged into the currently open table when its column count matches
+// (same shape = likely the same table continuing), otherwise it starts a
+// new logical table. This is less precise about page-break continuations
+// than the header-aware pass, but ensures ordinary ruled/columnar tables
+// still get extracted instead of silently producing nothing.
+async function buildLogicalTablesFallback(pdf, opts, onProgress){
+  const numPages = pdf.numPages;
+  const logicalTables = [];
+  let current = null;
+
+  for (let p = 1; p <= numPages; p++){
+    if (onProgress) onProgress(p);
+    const table = await extractPageTable(pdf, p, opts);
+    if (table === null || table.length === 0) continue;
+
+    const sameShape = current && current[0].length === table[0].length;
+    if (!sameShape){
+      if (current) logicalTables.push(current);
+      current = [table[0]];
+      mergeDataRows(current, table.slice(1));
+    } else {
+      mergeDataRows(current, table);
+    }
+  }
+  if (current) logicalTables.push(current);
+  return logicalTables;
+}
+
+// Tries the header-aware pass first (best results on documents that use
+// the index-row convention); if that finds nothing at all, falls back to
+// the shape-based pass so other ruled/columnar tables still get extracted
+// rather than producing an empty result.
+async function buildLogicalTables(pdf, opts, onProgress){
+  const primary = await buildLogicalTablesHeaderAware(pdf, opts, onProgress);
+  if (primary.length > 0) return primary;
+  return await buildLogicalTablesFallback(pdf, opts, onProgress);
+}
+
+function asciiRatio(text){
+  const visible = text.replace(/\s/g, '');
+  if (visible.length === 0) return 1;
+  let count = 0;
+  for (const ch of visible) if (ch.charCodeAt(0) < 128) count++;
+  return count / visible.length;
+}
+
+// A genuine index row populates MOST of the table's columns with "(1)
+// (2) (3)..." — requiring at least 2 such cells (not just 1) avoids a
+// single stray bracketed number elsewhere in a cell (e.g. a dosage like
+// "(50)") being mistaken for it and incorrectly splitting the table.
+function isIndexRow(row){
+  const nonBlank = row.filter(c => String(c).trim() !== '');
+  if (nonBlank.length < 2) return false;
+  return row.every(c => /^\(\d+\)$/.test(String(c).trim()) || String(c).trim() === '');
+}
+function findHeaderBlock(table){
+  for (let i = 1; i < table.length; i++){
+    if (isIndexRow(table[i])){
+      return { headerRow: table[i-1], dataRows: table.slice(i+1) };
+    }
+  }
+  return null;
+}
+
+// A notes/footnote section is marked by a "Notes:" (or "Note:") heading
+// in gazette-style documents — that's used as the end-of-table signal.
+// Earlier this also matched a lone letter in parentheses like "(a)", but
+// that's ambiguous with roman-numeral list markers such as "(i)", "(ii)"
+// that legitimately appear inside real table cells (e.g. a manufacturer
+// column listing multiple companies) — "(i)" is a single letter too, so
+// that check caused false positives that cut real table data short. The
+// heading text alone is a strong, unambiguous signal with no such collision.
+// A "starts with" match (not exact) tolerates trailing content the cell
+// might pick up. The printing/publishing colophon line that closes many
+// government documents ("Uploaded by ... / Published by ...") is checked
+// independently, as a safety net in case the notes heading isn't detected
+// cleanly for some reason.
+function looksLikeNotesHeading(cell){
+  return /^notes?\s*:?/i.test(String(cell).trim());
+}
+// Redundant safety net: the "Notes:" heading row often has only ONE
+// populated cell, so it can get filtered out earlier by the "needs 2+
+// populated columns" rule before this check ever sees it — leaving just
+// the lettered list to detect. A lone letter in parentheses is otherwise
+// ambiguous with roman-numeral markers like "(i)", "(ii)" that legitimately
+// appear in real table cells (e.g. a manufacturer column), so this
+// deliberately excludes every letter that's also a roman numeral
+// (i, v, x, l, c, d, m) — it only matches letters that can't collide,
+// which is enough since a notes list always starts at "(a)".
+function looksLikeFootnoteLetter(cell){
+  return /^\((?!i|v|x|l|c|d|m)[a-z]\)$/i.test(String(cell).trim());
+}
+function looksLikeColophon(cell){
+  return /^(uploaded|published)\s+by\b/i.test(String(cell).trim());
+}
+function truncateAtFootnotes(table){
+  for (let i = 0; i < table.length; i++){
+    const row = table[i];
+    if (looksLikeNotesHeading(row[0]) || looksLikeFootnoteLetter(row[0]) || row.some(looksLikeColophon)){
+      return { table: table.slice(0, i), hitFootnotes: true };
+    }
+  }
+  return { table, hitFootnotes: false };
+}
+
+// Removes running-header/section-marker text that can end up glued onto
+// an otherwise-real cell when column detection isn't perfectly clean —
+// e.g. "THE GAZETTE OF INDIA", "EXTRAORDINARY", and the "[PART II—SEC.
+// 3(ii)]" style section marker. That marker is matched piece-by-piece
+// (PART <roman>, SEC. <n>, (<roman>), stray brackets) rather than as one
+// whole-cell bracket pair, because column-detection can split it across
+// two cells (e.g. "[PART II" in one, "SEC. 3(ii)]" in the next) — a
+// pair-only regex would then match neither fragment. It's also tolerant
+// of stray spaces mid-word ("P ART", "S EC"), a known PDF text-extraction
+// quirk from individually-positioned glyphs. If almost nothing meaningful
+// remains after stripping, the cell is blanked entirely rather than left
+// with a few orphaned punctuation marks.
+const PART_SEC_RE = /P\s*ART\s*[IVXLC]+|S\s*EC\s*\.?\s*\d+|[\[\]]/gi;
+function stripFurnitureFragments(text){
+  const original = String(text);
+  let t = original;
+  t = t.replace(/\bTHE GAZETTE OF INDIA\b/gi, ' ');
+  t = t.replace(/\bEXTRAORDINARY\b/gi, ' ');
+  t = t.replace(PART_SEC_RE, ' ');
+  t = t.replace(/\s{2,}/g, ' ').trim();
+  // Only collapse to blank if something was actually stripped AND what's
+  // left is negligible — otherwise short legitimate cells ("(1)", "Sl.",
+  // "1 Tablet") would be wiped out even though nothing matched them.
+  // Note: this intentionally does NOT match a bare "(ii)"/"(iii)" pattern
+  // on its own — that would also match legitimate roman-numeral manufacturer
+  // list markers (e.g. "(i) M/s X / (ii) M/s Y") anywhere they appear, which
+  // caused real data loss. Removing "PART <roman>" and "SEC. <n>" already
+  // strips enough of a split "[PART II" / "SEC. 3(ii)]" fragment that the
+  // leftover "(ii)" alone collapses via the tiny-remainder rule below,
+  // without a dedicated (and unsafe) roman-numeral pattern.
+  const somethingRemoved = t.length < original.trim().length;
+  if (somethingRemoved && t.replace(/[^A-Za-z0-9]/g, '').length <= 2) return '';
+  return t;
+}
+
+// Appends rows onto an in-progress logical table. A row without content
+// in its own first column (no serial number) never becomes a standalone
+// row — it's always folded into the previous row instead (its non-empty
+// cells appended with a line break), whether that's a genuine page-break
+// continuation or just a stray/blank grid row.
+//
+// If the table's first column looks like an incrementing serial number
+// (the common case for these documents), a row whose first-column value
+// IS populated but isn't a plausible next number is treated the same way
+// — as contamination, not a genuine new row. This catches things like a
+// page footer's page number bleeding into that column on a continuation
+// row (e.g. "8" appearing where a blank was expected, right after serial
+// number 18): a real next row would be 19, not 8, so it's reclassified
+// and merged instead of standing alone as a bogus "row 8".
+//
+// Rows are normalized to the table's column count first, since per-page
+// column detection can vary slightly in width.
+function looksNumeric(s){ return /^\d+$/.test(String(s).trim()); }
+
+function mergeDataRows(target, newRows){
+  const ncols = target[0].length;
+  newRows.forEach(rawRow => {
+    let row = rawRow.slice(0, ncols);
+    while (row.length < ncols) row.push('');
+    let firstBlank = String(row[0] || '').trim() === '';
+
+    if (!firstBlank && looksNumeric(row[0])){
+      let lastNum = null;
+      for (let i = target.length - 1; i >= 1; i--){
+        if (looksNumeric(target[i][0])){ lastNum = parseInt(target[i][0], 10); break; }
+      }
+      const thisNum = parseInt(row[0], 10);
+      if (lastNum !== null && thisNum <= lastNum){
+        row = row.slice();
+        row[0] = '';
+        firstBlank = true;
+      }
+    }
+
+    if (firstBlank){
+      if (target.length > 1){
+        const prev = target[target.length - 1];
+        target[target.length - 1] = prev.map((cell, i) => {
+          const addition = String(row[i] || '').trim();
+          if (!addition) return cell;
+          return String(cell || '').trim() ? cell + '\n' + addition : addition;
+        });
+      }
+      // no previous row to merge into (right after the header) — drop silently
+    } else if (row.some(c => String(c || '').trim() !== '')){
+      target.push(row);
+    }
+  });
+}
+
+// Strips characters outside basic English usage (Latin letters, digits,
+// common punctuation/currency/whitespace) from a text item's string.
+// If, after stripping, less than half the original visible characters
+// remain, the item is treated as non-English and blanked out entirely
+// (rather than left as a fragment of stray punctuation).
+const ENGLISH_ALLOWED = /[A-Za-z0-9\s.,;:!?'"()\[\]{}\-_/\\@#$%&*+=<>|~`^°$€£¥%]/g;
+function filterEnglishItem(item){
+  const original = item.str || '';
+  const visibleOriginal = original.replace(/\s/g, '');
+  if (visibleOriginal.length === 0) return item;
+  const matches = original.match(ENGLISH_ALLOWED) || [];
+  const cleaned = matches.join('');
+  const visibleCleaned = cleaned.replace(/\s/g, '');
+  if (visibleCleaned.length < visibleOriginal.length * 0.5){
+    return Object.assign({}, item, { str: '' });
+  }
+  return Object.assign({}, item, { str: cleaned });
+}
+
+// Keeps rows that look like actual table content. A row with content
+// starting in the first column needs at least 2 populated cells to count
+// (filters out left-aligned paragraph text/headings). A row with a BLANK
+// first column is kept even with just one populated cell, since that's
+// exactly the shape of a page-break-wrapped continuation fragment that
+// mergeDataRows needs to see — dropping it here would silently lose data.
+function keepTableRowsOnly(table){
+  if (table.length === 0) return table;
+  return table.filter(row => {
+    const nonEmpty = row.filter(cell => String(cell).trim() !== '').length;
+    const firstBlank = String(row[0] || '').trim() === '';
+    return firstBlank ? nonEmpty >= 1 : nonEmpty >= 2;
+  });
+}
+
+function trimTable(table){
+  if (table.length === 0) return table;
+  // drop fully-empty rows
+  let rows = table.filter(r => r.some(c => String(c).trim() !== ''));
+  if (rows.length === 0) return rows;
+  const numCols = Math.max(...rows.map(r => r.length));
+  rows = rows.map(r => { const c = r.slice(); while (c.length < numCols) c.push(''); return c; });
+  // drop fully-empty columns
+  const keep = [];
+  for (let c=0;c<numCols;c++){
+    if (rows.some(r => String(r[c]).trim() !== '')) keep.push(c);
+  }
+  return rows.map(r => keep.map(c => r[c]));
+}
+
+// Inserts a line break after each comma or colon within a cell's text, so
+// long values (ingredient lists, "Contains: X, Y, Z" style cells) wrap
+// onto multiple lines when "wrap text" is on. Purely numeric values (e.g.
+// "1,234.56") are left alone so thousands separators aren't broken up.
+// Note: this also breaks after a colon inside things like times/ratios
+// (e.g. "10:30") if they appear in text cells — there's no reliable way
+// to tell those apart from "Contains:" style labels from text alone.
+function applyLineBreaks(text){
+  const str = String(text);
+  if (str.trim() === '') return str;
+  if (/^-?\d[\d,]*\.?\d*$/.test(str.trim())) return str;
+  return str.split(/(?<=[,:])\s*/).map(s => s.trim()).filter(s => s !== '').join('\n');
+}
+
+// Drops rows that are just page furniture (running headers/footers, a
+// lone page number, bracketed section markers like "[PART II—SEC. 3(ii)]")
+// rather than real table data. Ruling-line grid detection already keeps
+// most of this out (it's physically outside the table's drawn borders),
+// so this mainly guards the position-clustering fallback path, in case a
+// page has no detectable grid at all.
+function isFurnitureCell(text){
+  const t = String(text).trim();
+  if (t === '') return true;
+  if (/^\[.*\]$/.test(t)) return true;
+  if (/^\d{1,4}$/.test(t)) return true;
+  if (/gazette|extraordinary/i.test(t)) return true;
+  if (/^(uploaded|published)\s+by\b/i.test(t)) return true;
+  return false;
+}
+function dropPageFurnitureRows(table){
+  return table.filter(row => !row.every(cell => isFurnitureCell(cell)));
+}
+
+// Writes a 2D table into an ExcelJS worksheet: first row is treated as the
+// heading and optionally colored/bolded; data rows optionally get a line
+// break inserted after each comma/colon; all cells get wrap text + a light
+// border for a clean, readable "as extracted" look. Returns nothing —
+// mutates the worksheet, appending rows (so it can be called repeatedly
+// for a combined multi-page sheet).
+const HEADING_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+const THIN_BORDER = { style: 'thin', color: { argb: 'FFD1D5DB' } };
+
+function writeTableToSheet(ws, table, opts){
+  if (!table || table.length === 0) return;
+  const { colorHeading, breakAfterPunct } = opts;
+  const numCols = Math.max(...table.map(r => r.length));
+
+  table.forEach((rowData, rIdx) => {
+    const isHeading = rIdx === 0;
+    const values = rowData.map(cell => {
+      if (isHeading || !breakAfterPunct) return cell;
+      return applyLineBreaks(cell);
+    });
+    const row = ws.addRow(values);
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.alignment = { wrapText: true, vertical: 'top', horizontal: isHeading ? 'center' : 'left' };
+      cell.border = { top: THIN_BORDER, left: THIN_BORDER, bottom: THIN_BORDER, right: THIN_BORDER };
+      if (isHeading){
+        cell.font = { bold: true, color: { argb: colorHeading ? 'FFFFFFFF' : 'FF000000' } };
+        if (colorHeading) cell.fill = HEADING_FILL;
+      }
+    });
+  });
+
+  // reasonable column widths based on longest content, capped so wrap-text does the rest
+  for (let c = 0; c < numCols; c++){
+    let maxLen = 10;
+    table.forEach(r => {
+      const val = String(r[c] || '');
+      const longestLine = Math.max(...val.split('\n').map(s => s.length));
+      if (longestLine > maxLen) maxLen = longestLine;
+    });
+    ws.getColumn(c+1).width = Math.min(maxLen + 2, 40);
+  }
+  if (colorHeading) ws.views = [{ state: 'frozen', ySplit: 1 }];
+}
+
+function downloadBlob(buffer, filename){
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function renderPreview(rows){
+  previewTable.innerHTML = '';
+  if (!rows || rows.length === 0){ previewWrap.classList.remove('show'); return; }
+  const maxRows = Math.min(rows.length, 15);
+  const thead = document.createElement('tr');
+  const numCols = rows[0].length;
+  for (let c=0;c<numCols;c++){
+    const th = document.createElement('th');
+    th.textContent = 'Col ' + (c+1);
+    thead.appendChild(th);
+  }
+  previewTable.appendChild(thead);
+  for (let r=0;r<maxRows;r++){
+    const tr = document.createElement('tr');
+    for (let c=0;c<numCols;c++){
+      const td = document.createElement('td');
+      td.textContent = rows[r][c] || '';
+      tr.appendChild(td);
+    }
+    previewTable.appendChild(tr);
+  }
+  previewWrap.classList.add('show');
+}
+
+// --- PWA install + service worker ---
+if ('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js').catch(console.error);
+  });
+}
+let deferredPrompt;
+const installBtn = document.getElementById('installBtn');
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  installBtn.classList.add('show');
+});
+installBtn.addEventListener('click', async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt = null;
+  installBtn.classList.remove('show');
+});
+</script>
+</body>
+</html>
